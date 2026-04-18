@@ -301,20 +301,29 @@ let openEseCard = null; // rowIndex aperto nell'elenco
 // API
 // ============================================================
 async function apiGet(action, params={}) {
-  const url = new URL(APPS_SCRIPT_URL);
-  url.searchParams.set('action', action);
-  Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
-  const r = await fetch(url.toString(), {redirect:'follow'});
-  return r.json();
+  let urlStr = APPS_SCRIPT_URL + '?action=' + encodeURIComponent(action);
+  Object.entries(params).forEach(([k,v]) => {
+    urlStr += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(String(v));
+  });
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 20000);
+  try {
+    const r = await fetch(urlStr, {redirect:'follow', signal: controller.signal});
+    clearTimeout(tid);
+    const text = await r.text();
+    try { return JSON.parse(text); }
+    catch(e) {
+      console.error('Risposta non JSON:', text.substring(0,500));
+      return {ok:false, error:'Risposta non valida: ' + text.substring(0,80)};
+    }
+  } catch(e) {
+    clearTimeout(tid);
+    if (e.name==='AbortError') return {ok:false, error:'Timeout — Apps Script non risponde'};
+    return {ok:false, error: e.message};
+  }
 }
-// Apps Script non gestisce CORS preflight sulle POST con application/json.
-// Soluzione: tutto via GET con payload JSON encodato come parametro.
 async function apiPost(action, data) {
-  const url = new URL(APPS_SCRIPT_URL);
-  url.searchParams.set('action', action);
-  url.searchParams.set('payload', JSON.stringify(data));
-  const r = await fetch(url.toString(), {redirect:'follow'});
-  return r.json();
+  return apiGet(action, {payload: JSON.stringify(data)});
 }
 
 // ============================================================
@@ -498,13 +507,12 @@ async function saveEsercizio(rowIndex) {
 
   const res = await apiPost('updateEsercizioElenco', {rowIndex, peso, max, sets, reps, recupero: rec});
   if (res.ok) {
-    // aggiorna stato locale
     const e = eserciziDB.find(e=>e.rowIndex===rowIndex);
     if (e) { e.peso=peso; e.max=max; e.sets=sets; e.reps=reps; e.recupero=rec; }
     showToast('Salvato su Sheets', 'success');
-    toggleEseCard(rowIndex); // chiudi la card
+    toggleEseCard(rowIndex);
   } else {
-    showToast('Errore salvataggio', 'error');
+    showToast((res.error||'Errore salvataggio').substring(0,60), 'error');
   }
 }
 
